@@ -10,11 +10,7 @@ from datetime import timedelta
 import pandas as pd
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-import base64
-import hashlib
-import hmac
-import json
-import time
+import base64, hashlib, time, json, hmac
 
 # Secret key for signing the JWT
 SECRET_KEY = "your_secret_key_here"
@@ -123,10 +119,14 @@ class ProductHistoryRequest(BaseModel):
 class GroupCustomersRequest(BaseModel):
     city_name: str
     top_n: int = 10
+    product_name: str
 
 class LoginRequest(BaseModel):
     email: str
     password: str
+
+class CustomerProductRequest(BaseModel):
+    customer_id: int  # or use order_id if you prefer
 
 
 # Login route to generate the JWT
@@ -274,7 +274,7 @@ async def quarter_forecast(req: ProductHistoryRequest):
     data = load_data()
     data['date'] = pd.to_datetime(data['date'])
     start_date = pd.to_datetime(req.start_date)
-    end_date = start_date + pd.Timedelta(days=360)
+    end_date = start_date + pd.Timedelta(days=365)
     filtered_df = data[(data['date'] >= start_date) & (data['date'] <= end_date)]
     response_data = {"products": filtered_df['product_name'].unique().tolist()}
     return JSONResponse(content=response_data, status_code=200)
@@ -291,32 +291,89 @@ async def day_forecast(req: ProductHistoryRequest):
     return JSONResponse(content=response_data, status_code=200)
 
 
-@app.post("/group-costumers", description="Get a list of user IDs belonging to a specific city.")
-def get_users_by_city(req: GroupCustomersRequest):
+# @app.post("/group-customers", description="Get a list of user IDs belonging to a specific city.")
+# def get_users_by_city(req: GroupCustomersRequest):
+#     df = load_data()
+#     length = len(df[df['city_name'].str.lower() == req.city_name.lower()]['order_id'].tolist())
+#     if 'order_id' not in df.columns or 'city_name' not in df.columns:
+#         raise ValueError("DataFrame must contain 'order_id' and 'cityname' columns")
+
+#     # if length < req.top_n:
+#     # else:
+#         # filtered_users = df[df['city_name'].str.lower() == req.city_name.lower()]['order_id'].tolist()[:req.top_n]
+#     filtered_users = df[df['city_name'].str.lower() == req.city_name.lower()]['order_id'].tolist()
+
+#     city_data = df[df['city_name'].str.lower() == req.city_name.lower()]
+#     # Average order value
+#     # avg_order_value = city_data['order_id'].mean()
+
+#     total_orders = city_data['order_id'].count()
+#     total_order_full = df["order_id"].count()
+
+#     avg_orders = total_order_full / total_orders
+#     print(avg_orders)
+
+#     response_data = {
+#         "list":filtered_users,
+#         "average_order_value": round(avg_orders, 2),
+#     }
+#     return JSONResponse(content=response_data, status_code=200)
+
+import logging
+
+logging.basicConfig(level=logging.DEBUG)
+
+
+# @app.post("/group-customers", description="Get a list of user details belonging to a specific city.")
+# def get_users_by_city(req: GroupCustomersRequest):
+#     df = load_data()
+
+#     # Check if 'order_id' and 'city_name' are present in the dataframe
+#     if 'order_id' not in df.columns or 'city_name' not in df.columns:
+#         raise ValueError("DataFrame must contain 'order_id' and 'city_name' columns")
+
+#     # Filter data for the specific city
+#     city_data = df[df['city_name'].str.lower() == req.city_name.lower()]
+
+#     # Get the user data (not just 'order_id')
+#     user_details = city_data[['order_id', 'product_id', 'product_name', 'quantity', 'product_type',
+#                               'brand', 'manufacturer_name', 'date', 'city_name', 'dim_customer_key',
+#                               'procured_quantity', 'unit_selling_price', 'total_discount_amount']].head(20)
+
+#     response_data = {
+#         "user_details": user_details.to_dict(orient='records'),
+#     }
+
+#     logging.debug("Returning response data: %s", response_data)
+#     return JSONResponse(content=response_data, status_code=200)
+@app.post("/group-customers", description="Get user details for a specific product in a city.")
+def get_users_by_product_in_city(req: GroupCustomersRequest):
     df = load_data()
-    length = len(df[df['city_name'].str.lower() == req.city_name.lower()]['order_id'].tolist())
+
     if 'order_id' not in df.columns or 'city_name' not in df.columns:
-        raise ValueError("DataFrame must contain 'order_id' and 'cityname' columns")
+        raise ValueError("DataFrame must contain 'order_id' and 'city_name' columns")
 
-    # if length < req.top_n:
-    # else:
-        # filtered_users = df[df['city_name'].str.lower() == req.city_name.lower()]['order_id'].tolist()[:req.top_n]
-    filtered_users = df[df['city_name'].str.lower() == req.city_name.lower()]['order_id'].tolist()
+    # Filter by city and product
+    city_product_data = df[
+        (df['city_name'].str.lower() == req.city_name.lower()) &
+        (df['product_name'].str.lower() == req.product_name.lower())
+    ]
 
-    city_data = df[df['city_name'].str.lower() == req.city_name.lower()]
-    # Average order value
-    # avg_order_value = city_data['order_id'].mean()
+    if city_product_data.empty:
+        return JSONResponse(content={"user_details": []}, status_code=200)
 
-    total_orders = city_data['order_id'].count()
-    total_order_full = df["order_id"].count()
-
-    avg_orders = total_order_full / total_orders
-    print(avg_orders)
+    # Limit results
+    user_details = city_product_data[[
+        'order_id', 'product_id', 'product_name', 'quantity', 'product_type',
+        'brand', 'manufacturer_name', 'date', 'city_name', 'dim_customer_key',
+        'procured_quantity', 'unit_selling_price', 'total_discount_amount'
+    ]].head(req.top_n)
 
     response_data = {
-        "list":filtered_users,
-        "average_order_value": round(avg_orders, 2),
+        "user_details": user_details.to_dict(orient='records')
     }
+
+    logging.debug("Returning response data: %s", response_data)
     return JSONResponse(content=response_data, status_code=200)
 
 
@@ -336,23 +393,103 @@ def sales_report():
     return JSONResponse(content=response_data, status_code=200)
 
 
-@app.get("/low_stock", description="Get a list of user IDs belonging to a specific city.")
+# @app.get("/low_stock", description="Get a list of user IDs belonging to a specific city.")
+# def low_stock():
+#     df = preprocess()
+#     trending_products = find_trending_products(df)
+#     print(trending_products.columns)
+#     low_df = trending_products.sort_values(by='retail_price', ascending=True)
+
+#       # Select top 15 with product_name and uniq_id
+#     low_stock = low_df[['uniq_id', 'product_name']].head(15).to_dict(orient='records')
+
+#     response_data = {"low_stocks": low_stock}
+#     return JSONResponse(content=response_data, status_code=200)
+
+import re
+
+def extract_numeric_quantity(qty_str):
+    """Extracts the numeric part from '1 kg' or '120 units'."""
+    match = re.match(r"(\d+(?:\.\d+)?)", qty_str)
+    return float(match.group(1)) if match else 0
+
+@app.get("/low_stock", description="Get low stock items with product info.")
 def low_stock():
-    df = preprocess()
-    trending_products = find_trending_products(df)
-    print(trending_products.columns)
-    low_df = trending_products.sort_values(by='retail_price', ascending=True)
+    df = load_data()
 
-      # Select top 15 with product_name and uniq_id
-    low_stock = low_df[['uniq_id', 'product_name']].head(15).to_dict(orient='records')
+    # Extract numeric value from quantity string
+    df['numeric_quantity'] = df['quantity'].apply(extract_numeric_quantity)
 
-    response_data = {"low_stocks": low_stock}
+    # Group by product and compute totals
+    summary = (
+        df.groupby(['product_id', 'product_name', 'brand', 'manufacturer_name'], as_index=False)
+        .agg({
+            'numeric_quantity': 'sum',
+            'procured_quantity': 'sum',
+            'unit_selling_price': 'min'
+        })
+        .rename(columns={'numeric_quantity': 'total_quantity'})
+    )
+
+    # Filter for low stock: both procured and total quantity low
+    low_stock_df = summary[
+        (summary['procured_quantity'] <= 5) & (summary['total_quantity'] <= 20)
+    ].sort_values(by='procured_quantity', ascending=True).head(20)
+
+    # Convert to dict for response
+    low_stock_list = low_stock_df.to_dict(orient='records')
+    response_data = {"low_stocks": low_stock_list}
+
     return JSONResponse(content=response_data, status_code=200)
+
+#######
+
+from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi.responses import JSONResponse
+import pandas as pd
+from io import BytesIO
+
+
+# app = FastAPI()
+
+# In-memory storage for the uploaded CSV
+uploaded_data = None
+
+@app.post("/upload-csv", description="Upload a CSV file for report generation")
+async def upload_csv(file: UploadFile = File(...)):
+    global uploaded_data
+
+    # Check file type
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(status_code=400, detail="Only CSV files are supported.")
+
+    try:
+        # Read the uploaded file into a DataFrame
+        contents = await file.read()
+        uploaded_data = pd.read_csv(BytesIO(contents))
+        return {"message": "CSV uploaded successfully", "columns": uploaded_data.columns.tolist()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reading CSV file: {e}")
+
+@app.get("/generate-report", description="Generate a report based on the uploaded CSV")
+async def generate_report():
+    global uploaded_data
+
+    if uploaded_data is None:
+        raise HTTPException(status_code=400, detail="No CSV file uploaded.")
+
+    # Example report: top 5 products by frequency
+    report = uploaded_data['product_name'].value_counts().head(5).to_dict()
+    return JSONResponse(content={"report": report}, status_code=200)
+
+
+
+###########
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000,reload=True)
 
 
 # if __name__ == "__main__":
