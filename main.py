@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from utils import *
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -11,6 +11,9 @@ import pandas as pd
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import base64, hashlib, time, json, hmac
+import os
+# from io import BytesIO
+# from typing import Optional
 
 # Secret key for signing the JWT
 SECRET_KEY = "your_secret_key_here"
@@ -434,7 +437,7 @@ def low_stock():
     # Filter for low stock: both procured and total quantity low
     low_stock_df = summary[
         (summary['procured_quantity'] <= 5) & (summary['total_quantity'] <= 20)
-    ].sort_values(by='procured_quantity', ascending=True).head(20)
+    ].sort_values(by='procured_quantity', ascending=True).head(15)
 
     # Convert to dict for response
     low_stock_list = low_stock_df.to_dict(orient='records')
@@ -442,49 +445,72 @@ def low_stock():
 
     return JSONResponse(content=response_data, status_code=200)
 
-#######
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import UploadFile, File
 from fastapi.responses import JSONResponse
-import pandas as pd
-from io import BytesIO
+
+UPLOAD_DIR = "./data"
+
+@app.post("/upload-csv", description="Upload a CSV file and save to /data/")
+async def upload_csv(file: UploadFile = File(...)):
+    # Check if file is a CSV
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only CSV files are allowed.")
+
+    os.makedirs(UPLOAD_DIR, exist_ok=True)  # Ensure /data directory exists
+    file_path = os.path.join(UPLOAD_DIR, file.filename)
+
+    try:
+        # Write the uploaded file to disk
+        with open(file_path, "wb") as f:
+            content = await file.read()
+            f.write(content)
+
+        return JSONResponse(content={"message": f"File '{file.filename}' uploaded successfully."}, status_code=200)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
+
+@app.post("/upload-file", description="Upload a file and save it to ./data/")
+async def upload_file(file: UploadFile = File(...)):
+    # Ensure the /data directory exists
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+    # Create the full path for the file to be saved
+    file_path = os.path.join(UPLOAD_DIR, file.filename)
+
+    try:
+        # Write the uploaded file to disk
+        with open(file_path, "wb") as f:
+            content = await file.read()
+            f.write(content)
+
+        # Return a success message with the file name
+        return JSONResponse(content={"message": f"File '{file.filename}' uploaded successfully."}, status_code=200)
+
+    except Exception as e:
+        # If an error occurs, raise an HTTPException
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
 
 
 # app = FastAPI()
 
 # In-memory storage for the uploaded CSV
-uploaded_data = None
-
-@app.post("/upload-csv", description="Upload a CSV file for report generation")
-async def upload_csv(file: UploadFile = File(...)):
-    global uploaded_data
-
-    # Check file type
-    if not file.filename.endswith('.csv'):
-        raise HTTPException(status_code=400, detail="Only CSV files are supported.")
-
-    try:
-        # Read the uploaded file into a DataFrame
-        contents = await file.read()
-        uploaded_data = pd.read_csv(BytesIO(contents))
-        return {"message": "CSV uploaded successfully", "columns": uploaded_data.columns.tolist()}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading CSV file: {e}")
-
-@app.get("/generate-report", description="Generate a report based on the uploaded CSV")
-async def generate_report():
-    global uploaded_data
-
-    if uploaded_data is None:
-        raise HTTPException(status_code=400, detail="No CSV file uploaded.")
-
-    # Example report: top 5 products by frequency
-    report = uploaded_data['product_name'].value_counts().head(5).to_dict()
-    return JSONResponse(content={"report": report}, status_code=200)
+# uploaded_data = None
 
 
+# @app.get("/generate-report", description="Generate a report based on the uploaded CSV")
+# async def generate_report():
+#     global uploaded_data
+
+#     if uploaded_data is None:
+#         raise HTTPException(status_code=400, detail="No CSV file uploaded.")
+
+#     # Example report: top 5 products by frequency
+#     report = uploaded_data['product_name'].value_counts().head(5).to_dict()
+#     return JSONResponse(content={"report": report}, status_code=200)
 
 ###########
+
 
 
 if __name__ == "__main__":
