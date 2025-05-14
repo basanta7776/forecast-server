@@ -12,6 +12,8 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import base64, hashlib, time, json, hmac
 import os
+from prophet import Prophet
+
 # from io import BytesIO
 # from typing import Optional
 
@@ -104,6 +106,47 @@ def find_trending_products(df):
     recent_transactions = df[df['crawl_timestamp'] >= two_months_ago]
     # return recent_transactions['product_name']
     return recent_transactions
+
+def fast_forecast_sales(df, days: int = 30):
+    if df.empty:
+        raise ValueError("Input data is empty.")
+
+    df = df.copy()
+    df['date'] = pd.to_datetime(df['date'])
+
+    recent_cutoff = pd.to_datetime("today") - pd.Timedelta(days=365)
+    df = df[df['date'] >= recent_cutoff]
+
+    result_list = []
+
+    product_groups = df.groupby(['product_id', 'product_name'])
+
+    for (product_id, product_name), group in product_groups:
+        if group.shape[0] < 2:
+            continue
+
+        avg_price = group['unit_selling_price'].mean()
+
+        ts = group.groupby('date')['procured_quantity'].sum().reset_index()
+        ts = ts.set_index('date').resample('D').sum().fillna(0)
+        rolling_avg = ts['procured_quantity'].rolling(window=7, min_periods=1).mean().iloc[-1]
+
+        forecast_dates = pd.date_range(start=pd.to_datetime("today"), periods=days)
+        forecast_df = pd.DataFrame({
+            'date': forecast_dates.strftime('%Y-%m-%d'),
+            'predicted_quantity': [round(rolling_avg, 2)] * days,
+            'product_id': product_id,
+            'product_name': product_name,
+            'predicted_revenue': [round(rolling_avg * avg_price, 2)] * days
+        })
+
+        result_list.append(forecast_df)
+
+    if not result_list:
+        raise ValueError("No valid forecasts generated.")
+
+    return pd.concat(result_list, ignore_index=True)
+
 
 class TrendingRequest(BaseModel):
     top_k: int = 10
@@ -293,6 +336,27 @@ async def day_forecast(req: ProductHistoryRequest):
     print(response_data)
     return JSONResponse(content=response_data, status_code=200)
 
+
+class ProductHistoryRequest(BaseModel):
+    days: int = 30
+
+@app.post("/forecast", description="Fast forecast of product sales.")
+async def forecast_endpoint(req: ProductHistoryRequest):
+    try:
+        data = load_data()
+        forecast_df = fast_forecast_sales(data, days=req.days)
+        forecast_df = forecast_df.head(30)
+        total_revenue = round(forecast_df['predicted_revenue'].sum(), 2)
+
+        return JSONResponse(
+            content={
+                "forecast": forecast_df.to_dict(orient='records'),
+                "total_predicted_revenue": total_revenue
+            },
+            status_code=200
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 # @app.post("/group-customers", description="Get a list of user IDs belonging to a specific city.")
 # def get_users_by_city(req: GroupCustomersRequest):
